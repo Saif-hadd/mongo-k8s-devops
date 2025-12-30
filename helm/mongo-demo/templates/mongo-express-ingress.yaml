@@ -1,0 +1,22 @@
+{{- if .Values.mongoExpress.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mongo-express-ingress
+  namespace: {{ .Values.namespace.name }}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: {{ .Values.mongoExpress.ingress.ingressClassName }}
+  rules:
+  - host: {{ .Values.mongoExpress.ingress.host }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: mongo-express-service
+            port:
+              number: {{ .Values.mongoExpress.service.port }}
+{{- end }}

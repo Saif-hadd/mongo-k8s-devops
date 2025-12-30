@@ -1,0 +1,51 @@
+namespace:
+  name: mongo-demo
+
+mongodb:
+  replicas: 1
+  image:
+    repository: mongo
+    tag: "7.0"
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+  storage:
+    size: 5Gi
+  credentials:
+    username: admin
+    password: password123
+
+mongoExpress:
+  replicas: 2
+  image:
+    repository: mongo-express
+    tag: "1.0.2"
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  service:
+    type: LoadBalancer
+    port: 8081
+    nodePort: 30081
+  ingress:
+    enabled: true
+    host: mongo-express.local
+    ingressClassName: nginx
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+networkPolicies:
+  enabled: true
