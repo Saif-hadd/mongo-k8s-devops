@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/YOUR_USERNAME/mongo-k8s-devops.git
+    repoURL: https://github.com/Saif-hadd/mongo-k8s-devops
     targetRevision: main
     path: helm/mongo-demo
     helm:
