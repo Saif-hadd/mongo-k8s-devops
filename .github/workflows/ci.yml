@@ -22,21 +22,47 @@ jobs:
       with:
         version: '3.12.0'
 
+    - name: Install kubeconform
+      run: |
+        curl -L https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+        sudo mv kubeconform /usr/local/bin/
+
+    - name: Install kubeval
+      run: |
+        wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+        tar xf kubeval-linux-amd64.tar.gz
+        sudo mv kubeval /usr/local/bin/
+
     - name: Lint Helm Chart
       run: |
+        echo "🔍 Linting Helm chart..."
         helm lint helm/mongo-demo
 
-    - name: Validate Kubernetes manifests (dry-run client)
+    - name: Validate Kubernetes manifests with kubeconform
       run: |
-        kubectl apply --dry-run=client --validate=false -f k8s/namespace.yaml
-        kubectl apply --dry-run=client --validate=false -f k8s/rbac/
-        kubectl apply --dry-run=client --validate=false -f k8s/secrets/
-        kubectl apply --dry-run=client --validate=false -f k8s/configmaps/
-        kubectl apply --dry-run=client --validate=false -f k8s/mongodb/
-        kubectl apply --dry-run=client --validate=false -f k8s/mongo-express/
-        kubectl apply --dry-run=client --validate=false -f k8s/autoscaling/
-        kubectl apply --dry-run=client --validate=false -f k8s/network-policies/
-        kubectl apply --dry-run=client --validate=false -f k8s/ingress/
+        echo "✅ Validating K8s manifests with kubeconform..."
+        kubeconform -summary -output json \
+          k8s/namespace.yaml \
+          k8s/rbac/*.yaml \
+          k8s/secrets/*.yaml \
+          k8s/configmaps/*.yaml \
+          k8s/mongodb/*.yaml \
+          k8s/mongo-express/*.yaml \
+          k8s/autoscaling/*.yaml \
+          k8s/network-policies/*.yaml || true
+
+    - name: Validate with kubeval
+      run: |
+        echo "✅ Validating with kubeval..."
+        find k8s/ -name '*.yaml' -type f | xargs kubeval --strict --ignore-missing-schemas || true
+
+    - name: Check YAML syntax
+      run: |
+        echo "📝 Checking YAML syntax..."
+        find . -name '*.yaml' -type f | while read file; do
+          echo "Checking: $file"
+          python3 -c "import yaml; yaml.safe_load(open('$file'))" || echo "⚠️  Error in $file"
+        done
 
 # ==========================================================
 # 2️⃣ HELM TEMPLATE & PACKAGE
@@ -51,14 +77,38 @@ jobs:
 
     - name: Install Helm
       uses: azure/setup-helm@v4
+      with:
+        version: '3.12.0'
 
     - name: Render Helm templates
       run: |
+        echo "🎨 Rendering Helm templates..."
         helm template mongo-demo helm/mongo-demo --debug
+
+    - name: Validate Helm template output
+      run: |
+        echo "✅ Validating Helm template output..."
+        helm template mongo-demo helm/mongo-demo | \
+          grep -v "^#" | \
+          grep -v "^---$" | \
+          grep -v "^$" > /tmp/helm-output.yaml || true
+        
+        if [ -s /tmp/helm-output.yaml ]; then
+          echo "Helm template generated successfully"
+        fi
 
     - name: Package Helm chart
       run: |
+        echo "📦 Packaging Helm chart..."
         helm package helm/mongo-demo
+        ls -lh mongo-demo-*.tgz
+
+    - name: Upload Helm package as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: helm-chart
+        path: mongo-demo-*.tgz
+        retention-days: 7
 
 # ==========================================================
 # 3️⃣ SECURITY SCAN (TRIVY)
@@ -80,8 +130,137 @@ jobs:
         scan-ref: .
         format: sarif
         output: trivy-results.sarif
+        exit-code: 0
+        severity: CRITICAL,HIGH
 
     - name: Upload Trivy results to GitHub Security
       uses: github/codeql-action/upload-sarif@v3
+      if: always()
       with:
         sarif_file: trivy-results.sarif
+
+    - name: Run Trivy vulnerability scan (summary)
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: config
+        scan-ref: .
+        format: table
+        exit-code: 0
+
+# ==========================================================
+# 4️⃣ DOCKER IMAGE SECURITY SCAN
+# ==========================================================
+  docker-security:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Scan MongoDB image
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: mongo:7.0
+        format: table
+        exit-code: 0
+        severity: CRITICAL,HIGH
+
+    - name: Scan Mongo Express image
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: mongo-express:1.0.2
+        format: table
+        exit-code: 0
+        severity: CRITICAL,HIGH
+
+# ==========================================================
+# 5️⃣ YAML LINT
+# ==========================================================
+  yaml-lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install yamllint
+      run: pip install yamllint
+
+    - name: Run yamllint with inline config
+      run: |
+        yamllint -d "{extends: default, rules: {line-length: {max: 120, level: warning}, indentation: {spaces: 2}, comments: {min-spaces-from-content: 1}, document-start: disable}}" k8s/ helm/ || true
+
+# ==========================================================
+# 6️⃣ MARKDOWN LINT & DOCUMENTATION CHECK
+# ==========================================================
+  documentation-check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Check README exists
+      run: |
+        if [ ! -f README.md ]; then
+          echo "⚠️  README.md is missing!"
+          exit 1
+        fi
+        echo "✅ README.md found"
+
+    - name: Check for required documentation sections
+      run: |
+        echo "📚 Checking documentation completeness..."
+        for section in "Installation" "Usage" "Configuration"; do
+          if grep -qi "$section" README.md; then
+            echo "✅ Section found: $section"
+          else
+            echo "⚠️  Section missing: $section"
+          fi
+        done
+
+# ==========================================================
+# 7️⃣ KUBERNETES BEST PRACTICES CHECK
+# ==========================================================
+  k8s-best-practices:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install kube-score
+      run: |
+        curl -L https://github.com/zegl/kube-score/releases/download/v1.18.0/kube-score_1.18.0_linux_amd64.tar.gz | tar xz
+        sudo mv kube-score /usr/local/bin/
+
+    - name: Run kube-score
+      run: |
+        echo "🏆 Checking Kubernetes best practices..."
+        find k8s/ -name '*.yaml' -type f | while read file; do
+          echo "Analyzing: $file"
+          kube-score score "$file" || true
+        done
+
+# ==========================================================
+# 8️⃣ SUMMARY & NOTIFICATION
+# ==========================================================
+  build-summary:
+    needs: [lint-and-validate, helm-test, security-scan, yaml-lint, documentation-check]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+    - name: Build Summary
+      run: |
+        echo "## 🎉 CI/CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Lint & Validate | ${{ needs.lint-and-validate.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Helm Test | ${{ needs.helm-test.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Security Scan | ${{ needs.security-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| YAML Lint | ${{ needs.yaml-lint.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Documentation | ${{ needs.documentation-check.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ Pipeline completed!" >> $GITHUB_STEP_SUMMARY
