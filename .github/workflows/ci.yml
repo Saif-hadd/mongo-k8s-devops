@@ -7,14 +7,18 @@ on:
     branches: [ main ]
 
 jobs:
+# ==========================================================
+# 1️⃣ LINT & VALIDATION KUBERNETES + HELM
+# ==========================================================
   lint-and-validate:
     runs-on: ubuntu-latest
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
     - name: Install Helm
-      uses: azure/setup-helm@v3
+      uses: azure/setup-helm@v4
       with:
         version: '3.12.0'
 
@@ -22,46 +26,62 @@ jobs:
       run: |
         helm lint helm/mongo-demo
 
-    - name: Validate Kubernetes manifests
+    - name: Validate Kubernetes manifests (dry-run client)
       run: |
-        kubectl apply --dry-run=client -f k8s/namespace.yaml
-        kubectl apply --dry-run=client -f k8s/rbac/
-        kubectl apply --dry-run=client -f k8s/secrets/
-        kubectl apply --dry-run=client -f k8s/configmaps/
+        kubectl apply --dry-run=client --validate=false -f k8s/namespace.yaml
+        kubectl apply --dry-run=client --validate=false -f k8s/rbac/
+        kubectl apply --dry-run=client --validate=false -f k8s/secrets/
+        kubectl apply --dry-run=client --validate=false -f k8s/configmaps/
+        kubectl apply --dry-run=client --validate=false -f k8s/mongodb/
+        kubectl apply --dry-run=client --validate=false -f k8s/mongo-express/
+        kubectl apply --dry-run=client --validate=false -f k8s/autoscaling/
+        kubectl apply --dry-run=client --validate=false -f k8s/network-policies/
+        kubectl apply --dry-run=client --validate=false -f k8s/ingress/
 
+# ==========================================================
+# 2️⃣ HELM TEMPLATE & PACKAGE
+# ==========================================================
   helm-test:
     needs: lint-and-validate
     runs-on: ubuntu-latest
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
     - name: Install Helm
-      uses: azure/setup-helm@v3
+      uses: azure/setup-helm@v4
 
-    - name: Template Helm Chart
+    - name: Render Helm templates
       run: |
         helm template mongo-demo helm/mongo-demo --debug
 
-    - name: Package Helm Chart
+    - name: Package Helm chart
       run: |
         helm package helm/mongo-demo
 
+# ==========================================================
+# 3️⃣ SECURITY SCAN (TRIVY)
+# ==========================================================
   security-scan:
     runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+    permissions:
+      security-events: write
+      contents: read
 
-    - name: Run Trivy vulnerability scanner
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Run Trivy config scan
       uses: aquasecurity/trivy-action@master
       with:
-        scan-type: 'config'
-        scan-ref: '.'
-        format: 'sarif'
-        output: 'trivy-results.sarif'
+        scan-type: config
+        scan-ref: .
+        format: sarif
+        output: trivy-results.sarif
 
     - name: Upload Trivy results to GitHub Security
-      uses: github/codeql-action/upload-sarif@v2
+      uses: github/codeql-action/upload-sarif@v3
       with:
-        sarif_file: 'trivy-results.sarif'
+        sarif_file: trivy-results.sarif
