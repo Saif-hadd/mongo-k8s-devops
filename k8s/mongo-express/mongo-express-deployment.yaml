@@ -4,7 +4,7 @@ metadata:
   name: mongo-express
   namespace: mongo-demo
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: mongo-express
@@ -20,13 +20,14 @@ spec:
           - sh
           - -c
           - |
-            until nc -z mongo-service.mongo-demo.svc.cluster.local 27017; do
+            until nc -z mongo-service 27017; do
               echo "Waiting for MongoDB..."
               sleep 2
             done
+
       containers:
       - name: mongo-express
-        image: mongo-express:0.54.0
+        image: mongo-express:latest
         ports:
         - containerPort: 8081
         env:
@@ -35,21 +36,24 @@ spec:
             secretKeyRef:
               name: mongo-secret
               key: mongo-root-username
+
         - name: ME_CONFIG_MONGODB_ADMINPASSWORD
           valueFrom:
             secretKeyRef:
               name: mongo-secret
               key: mongo-root-password
+
         - name: ME_CONFIG_MONGODB_SERVER
-          value: "mongo-service.mongo-demo.svc.cluster.local"
+          value: mongo-service
+
         - name: ME_CONFIG_MONGODB_PORT
           value: "27017"
+
         - name: ME_CONFIG_MONGODB_ENABLE_ADMIN
           value: "true"
-        resources:
-          requests:
-            memory: "256Mi"
-            cpu: "250m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
+
+        - name: ME_CONFIG_BASICAUTH_USERNAME
+          value: admin
+
+        - name: ME_CONFIG_BASICAUTH_PASSWORD
+          value: password123
